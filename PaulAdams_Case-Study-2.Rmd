@@ -1,0 +1,632 @@
+---
+title: "CaseStudy2_Attrition"
+author: "Paul Adams"
+date: "August 10, 2019"
+output: 
+  html_document:
+    css: style.css
+---
+### GitHub Repository: https://github.com/PaulAdams4361/SMU-Case-Study-2
+### PowerPoint presentation: https://youtu.be/803OW_EOIbc
+
+# Executive Summary
+###The following is report produced on behalf of DDSAnalytics to highlight major factors contributing to attrition, as well as to predict attrition based on the current employees at Frito Lay. This report is in effort to assist talent management develop and retain employees, including resource investment on workforce planning, employee training, and other initiatives. Because these investments are expensive, DDSAnalytics would like help Frito Lay minimize preventable attrition.
+
+# Introduction
+###Frito Lay has gathered a large quantity of employee data, which ranges from attrition to pay raise percentages, years of employment, salary, and much more. Altogether, DDSAnalytics was provided with 34 predictor variables and accompanying attrition statuses, denoted as "Yes" and "No." With this data, we sought out to predict whether an employee is likely to leave their company (indicated as a "Yes" for attrition) given their current status, based on the 34 variables, or is likely to remain employed at the company (indicated by a "No"). While many of the 34 variables were used in this analysis, many others required transformations; refactoring; and even elimination since many were unnecessary or closely related to a more descriptive, comparable variable. For an example of variable elimination, the variable for "years in current role" was removed in favor of "years at company" since these were highly correlated with each other in the data set, but "years at company" more descriptive since it allows for employees to change jobs without increasing attrition. In another example, for variable transformation, "monthly income" was logarithmically transformed to better approximate a normal distribution that would be more reliable in statistical computation. For an example using refactoring, the categorical "business travel" variable, comprised of "Non-Travel," "Travel_Rarely," and "Travel_Frequently," were transformed into 0 (for non-travel, since it does not exist), 1 for travel rarely, and 2 for travel frequently, which allowed for better mathematical consideration within the predictive models. After tuning the prediction models and variables, this was determined a best approach.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Ingest and wrangle the data
+```{r Ingestion Engine, results='hide', echo=T}
+library(pacman)
+p_load(readr, dplyr, stats,tidyverse, ggthemes, RColorBrewer, gplots, RColorBrewer, ggplot2, corrplot, cowplot, skimr, randomForest, caret, MASS, Hmisc, permuco, e1071, dummies, openxlsx)
+
+# red in the data
+data.Employee <- read.csv('./CaseStudy2-data.csv', header=T, sep=",", strip.white=T) %>% 
+  data.frame()
+
+data.Employee.Regression <- read.csv('./CaseStudy2-data.csv', header=T, sep=",", strip.white=T) %>% data.frame()
+
+data.Test.Attrition <- read.csv('./CaseStudy2CompSet No Attrition.csv', header=T, sep=",", strip.white=T) %>% data.frame()
+
+data.Test.Income <- read.xlsx('./CaseStudy2CompSet No Salary.xlsx') %>% data.frame()
+
+data.nonTransformed <- read.csv('./CaseStudy2-data.csv', header=T, sep=",", strip.white=T) %>% data.frame()
+
+# Get an understanding of the data size
+dim(data.Employee)
+
+# Identify all NAs to impute (or remove) as needed
+na_count <- sapply(data.Employee, function(cnt) sum(length(which(is.na(cnt)))))
+na_count
+
+# Look into the data structure for class types and levels
+str(data.Employee)
+
+# Converting all char classes to factor and all int classes to numeric for uniformity in processing and predicting
+data.Employee <- data.Employee %>% mutate_if(is.integer, as.numeric) %>% mutate_if(is.character, as.factor) %>% data.frame()
+
+# Remove all factors with only one level and ID
+data.Employee <- data.Employee %>% subset(select=c(-ID, -Over18, -StandardHours, -EmployeeCount))
+
+# Make sure structure updated without issue
+#str(data.Employee)
+```
+
+```{r Predictor Histograms & Transformations, echo=T}
+# Histogram distributions before transformations
+data.Employee %>% keep(is.numeric) %>%
+  gather() %>%
+  ggplot(aes(x=value)) +
+  facet_wrap(~ key, scales = "free") +
+  geom_density() + 
+  geom_histogram(binwidth = NULL) +
+  theme_fivethirtyeight() +
+  ggtitle("Numeric Predictor Variables, Pre-Transformation")
+
+
+#convert ranges
+data.Employee$MonthlyIncome <- log(data.Employee$MonthlyIncome)
+data.Employee$YearsAtCompany <- log(data.Employee$YearsAtCompany+1)
+data.Employee$Age <- log(data.Employee$Age)
+data.Employee$DistanceFromHome <- log(data.Employee$DistanceFromHome)
+data.Employee$PercentSalaryHike <- log(data.Employee$PercentSalaryHike)
+data.Employee$YearsSinceLastPromotion <- log(data.Employee$YearsSinceLastPromotion+1)
+
+
+# After transformations
+data.Employee %>%keep(is.numeric) %>%
+  gather() %>%
+  ggplot(aes(x=value)) +
+  facet_wrap(~ key, scales = "free") +
+  geom_density() + 
+  geom_histogram(binwidth = NULL) +
+  theme_fivethirtyeight() +
+  ggtitle("Numeric Predictor Variables, Post Log-Transforming")
+
+```
+
+
+# Job Role Question: Identify Job Roles by Attrition Proportion
+### As requested, we performed an breakdown of attrition by job role. What we found is that sales representatives are by far the group most likely to change companies, with roughly twice as much likelihood as the next closest job role, followed closely by those in Human Resources, then Lab Technicians, Research Scientists, and Sales Executives. Both Research Directors and Manufacturing Directors are the least likely to change companies.
+
+Because there are only 51 Research Directors, and only one of them has left their company, there is not much data to use for inference. Furthermore, of 87 Manufacturing Directors, only two have left their company. Nonetheless, this possibly indicates a high level of job satisfaction for these roles.
+```{r JobRole Data pt. 1, echo=T}
+ggplot(data.Employee, aes(x=JobRole, fill = Attrition)) + 
+  geom_bar(alpha=0.95, position = "fill") + 
+  coord_flip() +
+  labs(x = "Job Role", y = "Proportion", title = "Job Roles Composite of Attrition",
+       subtitle = "Stacked bar plot") +
+  theme_hc() +
+  scale_fill_hc()
+```
+
+# Job Role Question: Key Factors in Sale Representatives' High Turnover
+### Identified later in this report, we identified that the two highest employee turnover factors are age and monthly income. Therefore, we identified sales representatives who have high and low turnover and segmented them based on age and monthly income.
+
+At around 30-32 years old, employees are less likely to leave their jobs based on the box and whisker plot. This is the age where the middle 50th percentiles of employees who have left overlaps with those who have not. After this point, which starts at the median line of those who have not left (roughly 38-years-old), there is a 75%-to-25% split between those who are not likely to leave and those who are, respectively.
+
+There is significant overlap when comparing groups of employees who have quit and those who have not. However, something distinctive is that of the employees who have not quit, about 75% earn more than 2,000-dollar monthly income, whereas of those who have quit, 25% earn less than 2,000 dollars.
+```{r, JobRole Data pt.2, echo=T}
+###################################################################################
+########### Breaking Down the impact of Age on JobRole Attrition status ###########
+###################################################################################
+
+# Creating variables to merge job role and attrition status in a dataframe with age for ggplot2:
+repRole <- data.nonTransformed[which(data.nonTransformed$JobRole == "Sales Representative"),"JobRole"] %>% data.frame()
+repAge <- data.nonTransformed[which(data.nonTransformed$JobRole == "Sales Representative"),"Age"] %>% data.frame()
+repAttrition <- data.nonTransformed[which(data.nonTransformed$JobRole == "Sales Representative"),"Attrition"] %>% data.frame()
+repMoIncome <- data.nonTransformed[which(data.nonTransformed$JobRole == "Sales Representative"),"MonthlyIncome"] %>% data.frame()
+repCoYears <- data.nonTransformed[which(data.nonTransformed$JobRole == "Sales Representative"),"YearsAtCompany"] %>% data.frame()
+
+# create dataframe with the variables
+repHolder <- data.frame(repRole, repAttrition,repAge, repMoIncome, repCoYears)
+
+# rename the columns
+colnames(repHolder) <- c("JobRole","Attrition","Age", "MonthlyIncome", "YearsAtCompany")
+
+# create the job role status "jobrole - attrition"
+JobRole_Status <- paste(as.character(repHolder$JobRole), "-", as.character(repHolder$Attrition))
+
+# final assembly dataframe with the new variables for sales representatives
+JobRole_Age_Attrition_df <- data.frame(JobRole_Status, repHolder$Age, repHolder$MonthlyIncome, repHolder$YearsAtCompany)
+
+# rename the columns
+colnames(JobRole_Age_Attrition_df) <- c("JobRole_Status","Age","MonthlyIncome", "YearsAtCompany")
+
+########################################################JobRole = Sales Rep
+# ggplot for job role attrition vs. age
+x1 <- ggplot(data = JobRole_Age_Attrition_df, aes(x = JobRole_Status, y = Age, fill = JobRole_Status)) + geom_boxplot() + scale_fill_few(palette = "Dark") + theme_few() + ggtitle("Sales Rep Attrition vs. Age") + theme(panel.background = element_rect(fill = 'ivory1'),legend.position="bottom")
+
+# ggplot for job role attrition vs. income
+
+x2 <- ggplot(data = JobRole_Age_Attrition_df, aes(x = JobRole_Status, y = MonthlyIncome, fill = JobRole_Status)) + geom_boxplot() + scale_fill_few(palette = "Dark") + theme_few() + ggtitle("Sales Rep Attrition vs. Monthly Income") + theme(panel.background = element_rect(fill = 'ivory1'),legend.position="none")
+
+# ggplot for job role attrition vs. years at company
+
+x3 <- ggplot(data = JobRole_Age_Attrition_df, aes(x = JobRole_Status, y = YearsAtCompany, fill = JobRole_Status)) + geom_boxplot() + scale_fill_few(palette = "Dark") + theme_few() + ggtitle("Sales Rep Attrition vs. Years at Company") + theme(panel.background = element_rect(fill = 'ivory1'),legend.position="none")
+
+par(oma=c(0.1,0.1,2.1,0))
+plot_grid(x1,x2,x3, ncol = 3, rel_widths = c(1,1,1))
+###########################################################################
+```
+
+# Indicator Values and Variable Recoding
+### Because many of our variables had categorical levels, I split them out into indicator variables where their presence is represented as 1s and 0s when present or not, respectively. This practice is also called one-hot encoding and if done in excess can cause overfitting problems with the model as the parameters selected influence output values, such as adjusted r-squared and p-values. As a result, I recoded ordinal categories into numerical sequences and recoded the presence or lack of a variable - such as yes/no - as 1s and 0s; when present, the value will impact the model, but when not, there will be no direct influence from the variable represented with a zero.
+```{r Dummy Variables & Recoding, echo=T}
+data.Employee2 <- data.Employee
+
+#############################################################################
+########################## Department dummy variable creation################
+#############################################################################
+Department <- data.frame(data.Employee2$Department)
+Department <- suppressWarnings(dummy.data.frame(Department))
+#levels(data.Employee2$Department)
+colnames(Department) <- c("Department.HumanResources","Department.ResearchDevelopment","Department.Sales")
+
+data.Employee2 <- cbind(data.Employee2,Department)
+data.Employee2 <- data.Employee2 %>% subset(select=-Department)
+#colnames(data.Employee2)
+#############################################################################
+#############################################################################
+#############################################################################
+
+#############################################################################
+########################## Education Field dummy variable creation###########
+#############################################################################
+EducationField <- data.frame(data.Employee2$EducationField)
+EducationField <- suppressWarnings(dummy.data.frame(EducationField))
+#levels(data.Employee2$EducationField)
+colnames(EducationField) <- c("Educ.HumanResources","Educ.LifeSciences","Educ.Marketing","Educ.Medical","Educ.Other","Educ.TechnicalDegree")
+
+data.Employee2 <- cbind(data.Employee2,EducationField)
+data.Employee2 <- data.Employee2 %>% subset(select=-EducationField)
+#colnames(data.Employee2)
+############################################################################
+############################################################################
+############################################################################
+
+#############################################################################
+########################## Job Role dummy variable creation##################
+#############################################################################
+JobRole <- data.frame(data.Employee2$JobRole)
+JobRole <- suppressWarnings(dummy.data.frame(JobRole))
+#levels(data.Employee2$JobRole)
+colnames(JobRole) <- c("Job.HealthcareRepresentative","Job.HumanResources","Job.LaboratoryTechnician","Job.Manager","Job.ManufacturingDirector","Job.ResearchDirector","Job.ResearchScientist","Job.SalesExecutive","Job.SalesRepresentative")
+
+data.Employee2 <- cbind(data.Employee2,JobRole)
+data.Employee2 <- data.Employee2 %>% subset(select=-JobRole)
+#colnames(data.Employee2)
+############################################################################
+############################################################################
+############################################################################
+
+############################################################################
+########################## Gender dummy variable creation###################
+############################################################################
+Gender <- data.frame(data.Employee2$Gender)
+Gender <- suppressWarnings(dummy.data.frame(Gender))
+#levels(data.Employee2$JobRole)
+colnames(Gender) <- c("Male","Female")
+
+data.Employee2 <- cbind(data.Employee2,Gender)
+data.Employee2 <- data.Employee2 %>% subset(select=-Gender)
+#colnames(data.Employee2)
+############################################################################
+############################################################################
+############################################################################
+
+# Recode BusinessTravel with numerical representation of ordinal factor levels
+data.Employee2$BusinessTravel <- dplyr::recode(data.Employee2$BusinessTravel, `Non-Travel`="0", `Travel_Rarely`="1", `Travel_Frequently`="2")
+
+# Recode MaritalStatus with numerical representation of ordinal factor levels
+data.Employee2$MaritalStatus <- dplyr::recode(data.Employee2$MaritalStatus, `Single`="1", `Married`="2", `Divorced`="3")
+
+# Recode OverTime with numerical representation of ordinal factor levels
+data.Employee2$OverTime <- dplyr::recode(data.Employee2$OverTime, `Yes`="1", `No`="0")
+
+# Recode Attrition with numerical representation of ordinal factor levels
+#data.Employee2$Attrition <- dplyr::recode(data.Employee2$Attrition, `Yes`="1", `No`="0")
+
+data.Employee2$BusinessTravel <- as.integer(data.Employee2$BusinessTravel)
+data.Employee2$MaritalStatus <- as.integer(data.Employee2$MaritalStatus)
+data.Employee2$OverTime <- as.integer(data.Employee2$OverTime)
+```
+
+
+# First Correlation Plot: Pre-Variable Elimination
+### Displayed is a `correlation plot` for the predictor variables. `Indicator variables` have a period (`.`) in the name. For each strongly, positively correlated pair of variables identified - excluding those from dummy variable creation, unless all share similar strong correlation - the less descriptive variable will be removed from the pair to prevent overfitting the model.
+```{r Correlation Plot Map, echo=T}
+#####################################################################################
+#################### Start Corrplot for Non-Transformed Data ########################
+#####################################################################################
+  
+# Correlation plot to see correlation among predictor variables, excluding Attrition (the response)
+data.Employee.numeric <- data.Employee2  %>% subset(select=-Attrition)
+
+corrplot(cor(data.Employee.numeric)
+         , title = "Correlation of Predictor Variables, Before Variable Elimination"
+         , type = "lower"
+         , tl.pos = "ld"
+         , method = "square"
+         , tl.cex = 0.65
+         , tl.col = 'red'
+         , order = "alphabet"
+         , diag = F
+         , mar=c(0,0,5,0)
+         , bg="ivory1"
+         ,tl.srt=.05
+         )
+
+#####################################################################################
+#################### Exit Corrplot for Non-Transformed Data #########################
+#####################################################################################
+
+```
+
+
+# Remove Unnecessary Predictor Variables 
+### Here, predictor variables that have high correlation with stronger predictor variables are removed for collinearity. This will help prevent overfitting. Also, all factors are converted to integer.
+
+### Variables Removed:
+#### 1) `JobLevel` has been removed in favor of `MonthlyIncome`; `MonthlyIncome` is more descriptive with more levels.
+####
+#### 2) `TotalWorkingYears` has been removed in favor of `Age`; Age more closely approximates normality (less skewedness) and should behave better under that assumption.
+####
+#### 3) `PerformanceRating` has been removed in favor of `PercentSalaryHike`; `PerformanceRating` only has two levels.
+####
+#### 4) `YearsInCurrentRole` has been removed in favor of `YearsAtCompany`; `YearsAtCompany` has slightly less cross-correlation with other variables.
+####
+#### 5) `YearsWithCurrManager` has been removed in favor of `YearsAtCompany`; `YearsAtCompany` is always greater than or equal to `YearsWithCurrManager` since someone can change teams or departments, but remain employed at the company.
+```{r Remove Duped Variables, echo=T}
+#Remove cross-correlated predictor variables
+data.Employee.varFiltered <- data.Employee2 %>% subset(select = c(-JobLevel, -TotalWorkingYears, -PerformanceRating, -YearsInCurrentRole, -YearsWithCurrManager))
+
+# Make sure they're gone
+#str(data.Employee.varFiltered)
+```
+
+
+# Second Correlation Plot, post-Variable Elimination
+### A second correlation plot to display correlations among remaining variables indicates the strongest remaining correlations between predictor variables are for those who belong to variables that have had their levels recoded as indicator variables. These correlations are necessary to include in the model because eliminating them would provide a misleading fit for any models produced.
+```{r Correlation Matrix2, echo=T}
+# Display without response variable, Attrition
+data.employee.numeric2 <- data.Employee.varFiltered %>% subset(select=-Attrition)
+
+corrplot(cor(data.employee.numeric2)
+         , title = "Correlation of Predictor Variables, After Variable Elimination"
+         , type = "lower"
+         , tl.pos = "ld"
+         , method = "square"
+         , tl.cex = 0.65
+         , tl.col = 'red'
+         , order = "alphabet"
+         , diag = F
+         , mar=c(0,0,5,0)
+         , bg="ivory1"
+         ,tl.srt=.05
+         )
+
+```
+
+
+# Random Forest Variable Importance Plot
+### Based on the `Mean Decrease in Gini` plot, `Monthly Income`, `Age`, and `Years at Company` are the top three influencers on attrition. However, based on the `Mean Decrease in Accuracy` plot, `Overtime`, `Monthly Income`, and `Stock Option Level` are the top three (`Age` is fifth).
+```{r Random Forest Variable Importance Plot, echo=T}
+# Random Forest to show variables in order of importance for determining Attrtion (all variable transformations and eliminations have already taken place at this point)
+Important_Variables.varFiltered <- randomForest(Attrition ~., data = data.Employee.varFiltered, importance = T)
+
+#build the Variable Importance Plot
+varImpPlot(Important_Variables.varFiltered, main = "Predictor Variable Importance - Gini Measure", type=2)
+```
+
+# Addressing the Top Three Variables: Boxplots for Gini
+### Based on the Gini analysis, here are the top three variables that have the highest influence on `attrition`. Boxplots do a great job of displaying the distribution of data, along with variation and quartiles, including the interquartile range.
+
+#### a) With respect to the `Attrition` vs. `Age` plot, younger employees are more likely to leave their jobs. The median age of employees who leave is roughly 32-years-old. The middle 50th percentil spanning from around 28-years-old to 38. The median age of employees who do not leave is roughly 38-years-old, with the middle 50th percentile spanning from roughly 31 to 43-years-old. What this means is that once an employee is around 38-years-old, they are less likely to leave their job.
+
+#### b) With respect to the `Attrition` vs. `Monthly Income` plot, employees who earn less, are much more likely to leave their jobs. Once an employee begins having a monthly income of a little more than roughly $5,000, the employee is much less likely to leave their job. For perspective, the employee who leaves is at a median of roughly $3,000 per month with the 50th percentile spanning from roughly $2,500 to $5,500 per month. The employee who stays is at a median of roughly $5,200 to $9,000 per month.
+
+#### c) With respect to the `Attrition` vs. `Years at Company` plot, the data for attrition trends higher with fewer years at the company. The median years employed of employees who stay is roughly seven-and-a-half years with a 50th percentile spanning roughly four to ten years. The median years employed of companys who leaves is roughly four years with a 50th percentile spanning roughly one-and-a-half to eight-and-a-half years. The high attrition group is positively skewed whereas the group with low attrition is normally distributed. While there is some significant overlap, this means that attrition is more likely between one-and-a-half and three years (where the median of the high attrition group begins to approach the lower end of the lower attrition group's lower 50th percentile boundary).
+
+`Note:` Important to note, however, is that these are from the Gini metric. The mean decrease in accuracy metric still has these three variables in the top seven (with overtime at number one and montly income in second place for most important variables). The accuracy measure lists overtime as the leading important variable with monthly income following and Stock Option Level. However, there is no explanation for what this variable represents.
+```{r Gini Top 3 Box Plots, echo=T}
+data.Employee %>% keep(is.factor) %>% names -> label
+
+bw1 <- ggplot(data = data.nonTransformed, aes(x = Attrition, y = Age, fill = Attrition)) + geom_boxplot() + scale_fill_few(palette = "Dark") + theme_few() + ggtitle("Attrition vs. Age") + theme(panel.background = element_rect(fill = 'ivory1'))
+
+bw2 <- ggplot(data = data.nonTransformed, aes(x = Attrition, y = MonthlyIncome, fill = Attrition)) + geom_boxplot() + scale_fill_few(palette = "Dark") + theme_few() + ggtitle("Attrition vs. Monthly Income") + theme(panel.background = element_rect(fill = 'ivory1')) + ylab("Monthly Income")
+
+bw3 <- ggplot(data = data.nonTransformed, aes(x = Attrition, y = YearsAtCompany, fill = Attrition)) + geom_boxplot() + scale_fill_few(palette = "Dark") + theme_few() + ggtitle("Attrition vs. Years at Company") + theme(panel.background = element_rect(fill = 'ivory1')) + ylab("Years Employed at Company")
+
+par(oma=c(0.1,0.1,2.1,0))
+plot_grid(bw1,bw2,bw3, ncol = 3, rel_widths = c(1,1,1))
+```
+
+#k-Nearest Neighbors, Naive Bayes, & Multiple Linear Regression Model Development
+###Here, I test a `k-NN` model using cross-validation from the `data.Employee.varFiltered` dataset. The data is partitioned into 70% training data and 30% testing data.
+
+####Create Test and Train data - Attrition
+```{r Model Training, echo=T}
+data.Employee.varFiltered <- data.Employee.varFiltered %>% subset(select=c(-BusinessTravel,-Department.HumanResources,-Department.ResearchDevelopment,-Department.Sales))
+
+# Set seed while tuning
+#set.seed(123)
+
+#partitioning out the test/train data set
+dataPartition.varFiltered.Attrition <- createDataPartition(y=data.Employee.varFiltered$Attrition, p=0.7, list = F)
+
+# 70% Training
+dfTrain.filtered.Attrition <- data.Employee.varFiltered[dataPartition.varFiltered.Attrition,]
+
+# 30% Testing
+dfTest.filtered.Attrition <- data.Employee.varFiltered[-dataPartition.varFiltered.Attrition,]
+```
+
+```{r Parallel Processing, echo=T}
+# For optional parallel processing:
+# parallel::detectCores() # detected 8 cores available
+# workers <- makeCluster(6L) # distribute across 6 of 8 cores in parallel
+# registerDoParallel(workers) # invoke
+```
+
+# Set the training control parameters
+### For both the `k-NN` and `Naive Bayes` models, cross-validation was performed 125 times, using 5 repetitions of 25 folds. The `twoClassSummary` function was used for training toward specificity (which could be modified to tune toward sensitivity), meaning the data used was partitioned into 25 units of test data, repeated 5 times with a repartitioning of the folds for each repeat. After thorough testing, these parameters were determined ideal for both. Since the same data only has rows in the hundreds, this is not alarming; if the data were millions of rows, this may require varying levels of folds and repetitions.
+```{r trainControl Parameters, echo=T}
+# repeated cross validation 125 times
+train.Control <- trainControl(method = "repeatedcv",
+                              number = 25,
+                              repeats = 5,
+                              summaryFunction = twoClassSummary,
+                              classProbs = T)
+```
+
+
+# Perform k-Nearest Neighbors, Build Confusion Matrix
+### kNN for Attrition
+### The first model, `k-Nearest Neighbors` was used. This is a non-parametric, lazy-learning (learns very little from training data), supervised learning algorithm used for classification. It measures data points based on the Euclidian Distance metric (by default), in a process called voting, and assigns classifications based on the model tuning. In training, this model produced sensitivity of roughly 98% and specificity of roughly 23%. Consequently, another model is developed and tested using Naive Bayes.
+```{r kNN}
+# Setting up the knn model tune parameters, tuned to specificity with pre-processing.
+knn_fit.filtered.Attrition <- train(Attrition ~ .
+                , data = dfTrain.filtered.Attrition
+                , method = "knn"
+                , trControl=train.Control
+                , preProcess = c("center", "scale", "spatialSign")
+                , metric = "Spec"
+                 )
+
+knn_fit.filtered.Attrition
+
+test_pred.knn.filtered.Attrition <- predict(knn_fit.filtered.Attrition, newdata = dfTest.filtered.Attrition)
+
+confusionMatrix(table(test_pred.knn.filtered.Attrition, dfTest.filtered.Attrition$Attrition))
+```
+
+# Perform Naive Bayes (Attrition), confusion matrix for analysis
+### The second model employed the `Naive Bayes` algorithm. `Naive Bayes` is a probabilistic classifier that has strong assumptions requiring independence. For this reason, it was especially important to remove correlated predictors. Overall, this model produced a sensitivity and specificity each above 60%. Consequently, `Naive Bayes` was selected over `k-NN` for predicting Attrition.
+```{r Naive Bayes Classification, echo=T}
+nb_fit.filtered <- suppressWarnings(train(Attrition ~ .
+                          , data = dfTrain.filtered.Attrition
+                          , method = "nb"
+                          , trControl=train.Control
+                          , preProcess = c("center", "scale", "spatialSign")
+                          , metric = "Spec"))
+
+nb_fit.filtered
+
+test_pred.nb.filtered <- suppressWarnings(predict(nb_fit.filtered, newdata = dfTrain.filtered.Attrition))
+
+confusionMatrix(table(test_pred.nb.filtered, dfTrain.filtered.Attrition$Attrition))
+```
+
+# Set-Up for Attrition Test Data (Includes Transformations and Variable Updates)
+### All data being tested against must undergo the same variable transformations performed during training. As a result, the same procedures were copied and renamed to ingest a dataframe called data.Test.
+```{r Test Phase, echo=T}
+# Converting all char classes to factor and all int classes to numeric for uniformity in processing and predicting
+data.Test.Attrition <- data.Test.Attrition %>% mutate_if(is.integer, as.numeric) %>% mutate_if(is.character, as.factor) %>% data.frame()
+
+# Remove all factors with only one level and ID
+data.EmployeeN <- data.Test.Attrition %>% subset(select=c(-Over18, -StandardHours, -EmployeeCount))
+
+#convert ranges
+data.EmployeeN$MonthlyIncome <- log(data.EmployeeN$MonthlyIncome)
+data.EmployeeN$YearsAtCompany <- log(data.EmployeeN$YearsAtCompany+1)
+data.EmployeeN$Age <- log(data.EmployeeN$Age)
+data.EmployeeN$DistanceFromHome <- log(data.EmployeeN$DistanceFromHome)
+data.EmployeeN$PercentSalaryHike <- log(data.EmployeeN$PercentSalaryHike)
+data.EmployeeN$YearsSinceLastPromotion <- log(data.EmployeeN$YearsSinceLastPromotion+1)
+
+data.Employee3 <- data.EmployeeN
+
+############################################################################
+########################## Department dummy variable creation###############
+############################################################################
+DepartmentN <- data.frame(data.Employee3$Department)
+DepartmentN <- suppressWarnings(dummy.data.frame(DepartmentN))
+#levels(data.Employee3$Department)
+colnames(DepartmentN) <- c("Department.HumanResources","Department.ResearchDevelopment","Department.Sales")
+
+data.Employee3 <- cbind(data.Employee3,DepartmentN)
+data.Employee3 <- data.Employee3 %>% subset(select=-Department)
+#colnames(data.Employee3)
+############################################################################
+############################################################################
+############################################################################
+
+############################################################################
+########################## Education Field dummy variable creation##########
+############################################################################
+EducationField <- data.frame(data.Employee3$EducationField)
+EducationField <- suppressWarnings(dummy.data.frame(EducationField))
+#levels(data.Employee3$EducationField)
+colnames(EducationField) <- c("Educ.HumanResources","Educ.LifeSciences","Educ.Marketing","Educ.Medical","Educ.Other","Educ.TechnicalDegree")
+
+data.Employee3 <- cbind(data.Employee3,EducationField)
+data.Employee3 <- data.Employee3 %>% subset(select=-EducationField)
+#colnames(data.Employee3)
+############################################################################
+############################################################################
+############################################################################
+
+############################################################################
+########################## Job Role dummy variable creation#################
+############################################################################
+JobRole <- data.frame(data.Employee3$JobRole)
+JobRole <- suppressWarnings(dummy.data.frame(JobRole))
+#levels(data.Employee3$JobRole)
+colnames(JobRole) <- c("Job.HealthcareRepresentative","Job.HumanResources","Job.LaboratoryTechnician","Job.Manager","Job.ManufacturingDirector","Job.ResearchDirector","Job.ResearchScientist","Job.SalesExecutive","Job.SalesRepresentative")
+
+data.Employee3 <- cbind(data.Employee3,JobRole)
+data.Employee3 <- data.Employee3 %>% subset(select=-JobRole)
+#colnames(data.Employee3)
+############################################################################
+############################################################################
+############################################################################
+
+############################################################################
+########################## Gender dummy variable creation###################
+############################################################################
+Gender <- data.frame(data.Employee3$Gender)
+Gender <- suppressWarnings(dummy.data.frame(Gender))
+#levels(data.Employee3$JobRole)
+colnames(Gender) <- c("Male","Female")
+
+data.Employee3 <- cbind(data.Employee3,Gender)
+data.Employee3 <- data.Employee3 %>% subset(select=-Gender)
+#colnames(data.Employee3)
+############################################################################
+############################################################################
+############################################################################
+
+# Recode BusinessTravel with numerical representation of ordinal factor levels
+data.Employee3$BusinessTravel <- dplyr::recode(data.Employee3$BusinessTravel, `Non-Travel`="0", `Travel_Rarely`="1", `Travel_Frequently`="2")
+
+# Recode MaritalStatus with numerical representation of ordinal factor levels
+data.Employee3$MaritalStatus <- dplyr::recode(data.Employee3$MaritalStatus, `Single`="1", `Married`="2", `Divorced`="3")
+
+# Recode OverTime with numerical representation of ordinal factor levels
+data.Employee3$OverTime <- dplyr::recode(data.Employee3$OverTime, `Yes`="1", `No`="0")
+
+# Recode Attrition with numerical representation of ordinal factor levels
+#data.Employee3$Attrition <- dplyr::recode(data.Employee3$Attrition, `Yes`="1", `No`="0")
+
+data.Employee3$BusinessTravel <- as.integer(data.Employee3$BusinessTravel)
+data.Employee3$MaritalStatus <- as.integer(data.Employee3$MaritalStatus)
+data.Employee3$OverTime <- as.integer(data.Employee3$OverTime)
+
+data.Employee3 <- data.Employee3 %>% subset(select=c(-BusinessTravel,-Department.HumanResources,-Department.ResearchDevelopment,-Department.Sales))
+```
+
+# Predicting Attrition with the Model
+### In conclusion, since the `Naive Bayes` model was determined to be the best by both sensitivity and specificity, predictions with the competition data set were provided using that model. The output is saved as "Predictions_PaulAdams.csv" in the working directory (GitHub).
+```{r Testing, echo=T}
+#############################################################################################
+################################## Testing Zone #############################################
+#############################################################################################
+
+# apply the Naive Bayes model to predict future attrition
+data.Employee3$Attrition <- suppressWarnings(predict(nb_fit.filtered, newdata = data.Employee3))
+
+# frame the predictions with corresponding IDs from the data.Employee3 dataset, rename
+submit_Preds <- data.frame(data.Employee3$ID,data.Employee3$Attrition)
+submit_Preds <- data.Employee3 %>% subset(select=c(ID, Attrition))
+
+# write out the results to csv saved in wd
+write.csv(submit_Preds, "Case2PredictionsAdams Attrition.csv", row.names=F)
+#############################################################################################
+#############################################################################################
+#############################################################################################
+```
+
+# Variable Selection for Linear Regression
+### This is necessary for predicting MonthlyIncome since this is not binary classification; it is relatively continuous.
+```{r Variable Selection for Regression, echo=T}
+
+#############################################################################
+####################### Linear Model Creation ###############################
+#############################################################################
+model2.forward.Start <- lm(MonthlyIncome~1, data = data.Employee.Regression)
+
+model2.Allvar <- lm(MonthlyIncome ~ Age + Attrition + BusinessTravel + DailyRate + Department + DistanceFromHome + Education + EducationField + EmployeeNumber + EnvironmentSatisfaction + Gender + HourlyRate + JobInvolvement + JobLevel + JobRole + JobSatisfaction + MaritalStatus + MonthlyRate + NumCompaniesWorked + OverTime + PercentSalaryHike + PerformanceRating + RelationshipSatisfaction + StockOptionLevel + TotalWorkingYears + TrainingTimesLastYear + WorkLifeBalance + YearsAtCompany + YearsInCurrentRole + YearsSinceLastPromotion + YearsWithCurrManager, data=data.Employee.Regression)
+#############################################################################
+#############################################################################
+#############################################################################
+
+#############################################################################
+######## Akaike Information Criterion for Variable Selection Process#########
+#############################################################################
+
+#### Forward Selection
+model2.Forward <- stepAIC(model2.forward.Start, direction = "forward", trace = F, scope = formula(model2.Allvar))
+
+summary(model2.Forward)
+model2.Forward$anova
+#### suggested Forward Selection Model
+forward.lm <- lm(MonthlyIncome ~ JobLevel + JobRole + TotalWorkingYears + BusinessTravel + Gender + DailyRate + MonthlyRate + YearsWithCurrManager + YearsSinceLastPromotion + DistanceFromHome + EmployeeNumber, data=data.Employee.Regression)
+########################################################################
+
+#### Backward Elimination
+model2.Backward <- stepAIC(model2.Allvar, direction = "backward", trace = F, scope = formula(model2.forward.Start))
+summary(model2.Backward)
+model2.Backward$anova
+#### Backward Elimination Model Suggestion
+back.lm <- lm(MonthlyIncome ~ BusinessTravel + DailyRate + DistanceFromHome + 
+    EmployeeNumber + Gender + JobLevel + JobRole + MonthlyRate + 
+    PercentSalaryHike + PerformanceRating + TotalWorkingYears + 
+    YearsSinceLastPromotion + YearsWithCurrManager, data=data.Employee.Regression)
+########################################################################
+
+#### Stepwise Regression
+model2.Stepwise <- stepAIC(model2.Allvar, direction = "both", trace = F)
+summary(model2.Stepwise)
+model2.Stepwise$anova
+#### Stepwise Regression Model Suggestion
+step.lm <- lm(MonthlyIncome ~ BusinessTravel + DailyRate + DistanceFromHome + 
+    EmployeeNumber + Gender + JobLevel + JobRole + MonthlyRate + 
+    PercentSalaryHike + PerformanceRating + TotalWorkingYears + 
+    YearsSinceLastPromotion + YearsWithCurrManager, data=data.Employee.Regression)
+########################################################################
+```
+
+
+# Calculated Root Mean Square Error (RMSE) for Forward Selection Model:
+### Based on the `Residuals` and `QQ plots`, variance from the `Forward Selection` model seems mostly constant with a normal distrubtion of fitted residuals. There are two outliers with leverage, but without further analysis, it would be difficult to determine if these plots are due to accident (such as a typo or data conversion issue, for example) or if they're truly outliers. 
+```{r RMSE Forward Selection, echo=T}
+Forward.RMSE <- sqrt(mean(forward.lm$residuals^2))
+Forward.RMSE
+par(mfrow=c(2,2))
+plot(forward.lm)
+```
+
+# Calculated Root Mean Square Error (RMSE) for Backward Elimination Model
+### As with the forward selection model - which produces a slightly higher `Root Mean Square Error` - variance seems mostly constant with a normal distrubtion of fitted residuals. There are two outliers with leverage, but without further analysis, it would be difficult to determine if these plots are due to accident (such as a typo or data conversion issue, for example) or if they're truly outliers. Coupled with the outlier's leverage compared to the `Cook's Distance`, the slightly non-constant variance and tails in the distribution of residuals could be worth tuning for future updates.
+```{r RMSE Backward Elimination, echo=T}
+Backward.RMSE <- sqrt(mean(back.lm$residuals^2))
+Backward.RMSE
+par(mfrow=c(2,2))
+plot(back.lm)
+```
+
+# Calculated RMSE for `Stepwise Regression` Model
+### Ultimately, because the `Root Mean Square Error` was smaller with the `Backward Elimination` and `Stepwise Regression` models, we selected to move forward with predcition using the model selected by `Stepwise Regression`. Should model refinement be needed, investigating the outliers and considering further transformations could prove profitable.
+```{r RMSE Stepwise Regression, echo=T}
+Stepwise.RMSE <- sqrt(mean(step.lm$residuals^2))
+Stepwise.RMSE
+par(mfrow=c(2,2))
+plot(step.lm)
+```
+
+#Multiple Linear Regression Predictions
+### Here, the multiple linear regression model is employing the model chosen by `Stepwise Regression` top make predictions on the salary information provided in the competition set.
+```{r Salary Predictions, echo=T}
+# Apply the model to the test set to provide predicted salary values
+data.Test.Income$Salary <- predict.lm(step.lm, data.Test.Income)
+Case2Predictions <- data.frame(data.Test.Income$ID,data.Test.Income$Salary)
+
+Case2Predictions <- data.Test.Income %>% subset(select=c(ID, Salary))
+
+write.csv(Case2Predictions, "Case2PredictionsAdams Salary.csv", row.names=F)
+```
