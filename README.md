@@ -3,7 +3,8 @@
 ## **Frito Lay Attrition Project**
 
 ### _Purpose_
-Predicting attrition and salary at Frito Lay.
+This project applies k-Nearest Neighbors and Naive Bayes to predict attrition and Multiple 
+Linear Regression to target salaries that would prevent attrition for each unique employee.
 
 ### _Prediction Methods_
 1. k-Nearest Neighbors (k-NN)
