@@ -1,6 +1,6 @@
 # **DS6306: Doing Data Science**
 # **SMU Semester One, Summer 2019**
-## **Frito Lay Attrition project**
+## **Frito Lay Attrition Project**
 
 ### _Purpose_
 Predicting attrition and salary at Frito Lay.
