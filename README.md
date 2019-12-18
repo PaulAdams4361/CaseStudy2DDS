@@ -3,7 +3,7 @@
 ### SMU Semester One, Summer 2019
 ### Frito Lay Attrition project
 
-### _Purpose_
+<i>**Purpose**</i>
 Predicting attrition and salary at Frito Lay.
 
 ### _Prediction Methods_
