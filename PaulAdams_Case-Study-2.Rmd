@@ -7,7 +7,6 @@ output:
     css: style.css
 ---
 ### GitHub Repository: https://github.com/PaulAdams4361/SMU-Case-Study-2
-### PowerPoint presentation: https://youtu.be/803OW_EOIbc
 
 # Executive Summary
 ###The following is report produced on behalf of DDSAnalytics to highlight major factors contributing to attrition, as well as to predict attrition based on the current employees at Frito Lay. This report is in effort to assist talent management develop and retain employees, including resource investment on workforce planning, employee training, and other initiatives. Because these investments are expensive, DDSAnalytics would like help Frito Lay minimize preventable attrition.
